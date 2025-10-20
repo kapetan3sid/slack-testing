@@ -25,8 +25,44 @@ jobs:
             try {
               console.log('Starting Slack notification process...');
               
+              if (!process.env.SLACK_BOT_TOKEN) {
+                console.error('Error: SLACK_BOT_TOKEN environment variable is required');
+                process.exit(1);
+              }
+              
               const mapping = JSON.parse(fs.readFileSync('engineer-github-slack-mapping.json', 'utf8'));
               const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
+              
+              // Debug: Test bot authentication and get bot info
+              try {
+                const authTest = await slack.auth.test();
+                console.log('Bot authenticated as:', authTest.user, 'in workspace:', authTest.team);
+                console.log('Bot ID:', authTest.user_id);
+              } catch (err) {
+                console.error('❌ Auth test failed:', err.data || err.message);
+                return;
+              }
+              
+              // Debug: Try to get channel info
+              try {
+                const channelInfo = await slack.conversations.info({ channel: 'C07TXJZ0T3L' });
+                console.log('✅ Channel found:', channelInfo.channel.name);
+              } catch (err) {
+                console.error('❌ Channel info failed:', err.data || err.message);
+                console.log('🔍 Trying alternative channel methods...');
+                
+                // Try with # format as fallback
+                try {
+                  const result = await slack.chat.postMessage({
+                    channel: '#general',
+                    text: `TEST: Hey <@U077UDZ6284>, bot is working but can't access target channel C07TXJZ0T3L`
+                  });
+                  console.log('✅ Fallback to #general worked:', result.ok);
+                  return;
+                } catch (fallbackErr) {
+                  console.error('❌ Even #general failed:', fallbackErr.data || fallbackErr.message);
+                }
+              }
               
               // Get event data
               const eventPath = process.env.GITHUB_EVENT_PATH;
@@ -34,6 +70,9 @@ jobs:
               
               console.log('Event action:', event.action);
               console.log('PR URL:', event.pull_request?.html_url);
+              
+              // The Slack Channel ID you want to post in:
+              const CHANNEL_ID = 'C07TXJZ0T3L'; // Your verified channel ID
               
               let targetUsers = [];
               
@@ -69,7 +108,7 @@ jobs:
                 if (engineer) {
                   try {
                     const result = await slack.chat.postMessage({
-                      channel: 'C07TXJZ0T3L',
+                      channel: CHANNEL_ID,
                       text: `Hey <@${engineer.slack_id}>, you have a PR to review: ${event.pull_request.html_url}`
                     });
                     console.log(`✅ Sent to ${username} (${engineer.slack_id}):`, result.ok);
