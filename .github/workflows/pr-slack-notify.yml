@@ -2,7 +2,10 @@ name: PR Slack Notify - Local Mapping
 
 on:
   pull_request:
-    types: [opened, ready_for_review, review_requested]
+    types: [opened, ready_for_review]
+  pull_request_review_requested:
+    types: [created]
+
 
 jobs:
   notify:
