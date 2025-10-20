@@ -33,35 +33,13 @@ jobs:
               const mapping = JSON.parse(fs.readFileSync('engineer-github-slack-mapping.json', 'utf8'));
               const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
               
-              // Debug: Test bot authentication and get bot info
+              // Debug: Test bot authentication
               try {
                 const authTest = await slack.auth.test();
                 console.log('Bot authenticated as:', authTest.user, 'in workspace:', authTest.team);
-                console.log('Bot ID:', authTest.user_id);
               } catch (err) {
                 console.error('❌ Auth test failed:', err.data || err.message);
                 return;
-              }
-              
-              // Debug: Try to get channel info
-              try {
-                const channelInfo = await slack.conversations.info({ channel: 'C07TXJZ0T3L' });
-                console.log('✅ Channel found:', channelInfo.channel.name);
-              } catch (err) {
-                console.error('❌ Channel info failed:', err.data || err.message);
-                console.log('🔍 Trying alternative channel methods...');
-                
-                // Try with # format as fallback
-                try {
-                  const result = await slack.chat.postMessage({
-                    channel: '#general',
-                    text: `TEST: Hey <@U077UDZ6284>, bot is working but can't access target channel C07TXJZ0T3L`
-                  });
-                  console.log('✅ Fallback to #general worked:', result.ok);
-                  return;
-                } catch (fallbackErr) {
-                  console.error('❌ Even #general failed:', fallbackErr.data || fallbackErr.message);
-                }
               }
               
               // Get event data
