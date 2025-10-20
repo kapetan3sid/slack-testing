@@ -1,48 +1,70 @@
-name: PR Slack Notify - Local Mapping
+name: PR Slack Notify
 
 on:
   pull_request:
     types:
+      - review_requested
       - opened
       - ready_for_review
-      - review_requested
-
-
+      - reopened
+      - synchronize
 
 jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Install Slack SDK
-        run: npm install @slack/web-api
+      - run: npm install @slack/web-api
 
-      - name: Notify reviewers via Slack
+      - name: Notify assigned reviewers via Slack
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
         run: |
           node <<'EOF'
           const { WebClient } = require('@slack/web-api');
           const fs = require('fs');
+          // Read Slack mapping file from repo root
           const mapping = JSON.parse(fs.readFileSync('engineer-github-slack-mapping.json', 'utf8'));
           const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
 
-          // You might want to get reviewers dynamically from the event payload (see below)
-          // For demo, just broadcast:
-          for (const engineer of mapping.engineers) {
-            slack.chat.postMessage({
-                channel: 'C07TXJZ0T3L', // Your channel's Slack ID
-                text: `Hey <@${engineer.slack_id}>, you have a PR to review!`
-            })      
-            .then(res => console.log("Sent:", res.ok, res.channel))
-            .catch(err => console.error("Error sending:", err.data));
+          const eventPath = process.env.GITHUB_EVENT_PATH;
+          const event = JSON.parse(fs.readFileSync(eventPath, 'utf8'));
+
+          // The Slack Channel ID you want to post in:
+          const CHANNEL_ID = 'C123456789'; // <-- Replace with your channel's ID
+
+          let reviewers = [];
+
+          // If action is assigning a reviewer (PR event: review_requested)
+          if (event.action === 'review_requested' && event.requested_reviewer) {
+            // Single reviewer assigned
+            reviewers.push(event.requested_reviewer.login);
+          }
+          // If PR is opened or ready, get all requested reviewers
+          else if (event.pull_request && Array.isArray(event.pull_request.requested_reviewers)) {
+            reviewers = event.pull_request.requested_reviewers.map(r => r.login);
+          }
+
+          // Remove dupes
+          reviewers = [...new Set(reviewers)];
+
+          // Notify each mapped reviewer
+          for (const reviewer of reviewers) {
+            const engineer = mapping.engineers.find(e => e.github_username === reviewer);
+            if (engineer) {
+              slack.chat.postMessage({
+                channel: C07TXJZ0T3L,
+                text: `Hey <@${engineer.slack_id}>, you've been assigned to review a PR: ${event.pull_request.html_url}`
+              })
+              .then(res => console.log("Slack sent to:", reviewer, res.ok))
+              .catch(err => console.error("Slack error for:", reviewer, err.data || err));
+            } else {
+              console.log(`No Slack mapping found for reviewer ${reviewer}`);
+            }
           }
           EOF
-
