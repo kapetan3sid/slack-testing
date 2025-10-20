@@ -2,7 +2,7 @@ name: PR Slack Notify
 
 on:
   pull_request:
-    types: [opened, ready_for_review, review_requested]
+    types: [opened, ready_for_review, review_requested, assigned]
 
 jobs:
   notify:
@@ -20,16 +20,72 @@ jobs:
           node <<'EOF'
           const { WebClient } = require('@slack/web-api');
           const fs = require('fs');
-          const mapping = JSON.parse(fs.readFileSync('engineer-github-slack-mapping.json', 'utf8'));
-          const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
-          // Replace this with dynamic logic for PR event payload if needed
-          for (const engineer of mapping.engineers) {
-            slack.chat.postMessage({
-              channel: 'C07TXJZ0T3L', // Slack channel ID
-              text: `Hey <@${engineer.slack_id}>, you have a PR to review!`
-            })
-            .then(res => console.log("Sent:", res.ok, res.channel))
-            .catch(err => console.error("Error sending:", err.data));
+          
+          async function main() {
+            try {
+              console.log('Starting Slack notification process...');
+              
+              const mapping = JSON.parse(fs.readFileSync('engineer-github-slack-mapping.json', 'utf8'));
+              const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
+              
+              // Get event data
+              const eventPath = process.env.GITHUB_EVENT_PATH;
+              const event = JSON.parse(fs.readFileSync(eventPath, 'utf8'));
+              
+              console.log('Event action:', event.action);
+              console.log('PR URL:', event.pull_request?.html_url);
+              
+              let targetUsers = [];
+              
+              // Get reviewers and assignees based on event
+              if (event.action === 'review_requested' && event.requested_reviewer) {
+                targetUsers.push(event.requested_reviewer.login);
+                console.log('Reviewer requested:', event.requested_reviewer.login);
+              } else if (event.action === 'assigned' && event.assignee) {
+                targetUsers.push(event.assignee.login);
+                console.log('Assignee added:', event.assignee.login);
+              } else if (event.pull_request) {
+                // For opened/ready_for_review, notify all current reviewers and assignees
+                if (event.pull_request.requested_reviewers) {
+                  targetUsers.push(...event.pull_request.requested_reviewers.map(r => r.login));
+                }
+                if (event.pull_request.assignees) {
+                  targetUsers.push(...event.pull_request.assignees.map(a => a.login));
+                }
+              }
+              
+              // Remove duplicates
+              targetUsers = [...new Set(targetUsers)];
+              console.log('Target users:', targetUsers);
+              
+              if (targetUsers.length === 0) {
+                console.log('No target users found, skipping notifications');
+                return;
+              }
+              
+              // Send notifications
+              for (const username of targetUsers) {
+                const engineer = mapping.engineers.find(e => e.github_username === username);
+                if (engineer) {
+                  try {
+                    const result = await slack.chat.postMessage({
+                      channel: 'C07TXJZ0T3L',
+                      text: `Hey <@${engineer.slack_id}>, you have a PR to review: ${event.pull_request.html_url}`
+                    });
+                    console.log(`✅ Sent to ${username} (${engineer.slack_id}):`, result.ok);
+                  } catch (err) {
+                    console.error(`❌ Error sending to ${username}:`, err.data || err.message);
+                  }
+                } else {
+                  console.log(`⚠️ No Slack mapping found for ${username}`);
+                }
+              }
+            } catch (error) {
+              console.error('Script error:', error);
+              process.exit(1);
+            }
           }
+          
+          main();
           EOF
 
