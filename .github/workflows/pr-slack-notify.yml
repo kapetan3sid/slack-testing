@@ -3,12 +3,8 @@ name: PR Slack Notify
 on:
   pull_request:
     types:
-      - review_requested
-      - opened
-      - ready_for_review
-      - reopened
-      - synchronize
-      - assigned
+      - review_requested  # When a reviewer is assigned
+      - assigned          # When an assignee is assigned
 
 jobs:
   notify:
@@ -29,43 +25,96 @@ jobs:
           node <<'EOF'
           const { WebClient } = require('@slack/web-api');
           const fs = require('fs');
-          // Read Slack mapping file from repo root
-          const mapping = JSON.parse(fs.readFileSync('engineer-github-slack-mapping.json', 'utf8'));
-          const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
+          
+          async function main() {
+            try {
+              // Validate required environment variables
+              if (!process.env.SLACK_BOT_TOKEN) {
+                console.error('Error: SLACK_BOT_TOKEN environment variable is required');
+                process.exit(1);
+              }
 
-          const eventPath = process.env.GITHUB_EVENT_PATH;
-          const event = JSON.parse(fs.readFileSync(eventPath, 'utf8'));
+              if (!process.env.GITHUB_EVENT_PATH) {
+                console.error('Error: GITHUB_EVENT_PATH environment variable is required');
+                process.exit(1);
+              }
 
-          // The Slack Channel ID you want to post in:
-          const CHANNEL_ID = 'C123456789'; // <-- Replace with your channel's ID
+              // Read Slack mapping file from repo root
+              const mapping = JSON.parse(fs.readFileSync('engineer-github-slack-mapping.json', 'utf8'));
+              const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
 
-          let reviewers = [];
+              const eventPath = process.env.GITHUB_EVENT_PATH;
+              const event = JSON.parse(fs.readFileSync(eventPath, 'utf8'));
 
-          // If action is assigning a reviewer (PR event: review_requested)
-          if (event.action === 'review_requested' && event.requested_reviewer) {
-            // Single reviewer assigned
-            reviewers.push(event.requested_reviewer.login);
-          }
-          // If PR is opened or ready, get all requested reviewers
-          else if (event.pull_request && Array.isArray(event.pull_request.requested_reviewers)) {
-            reviewers = event.pull_request.requested_reviewers.map(r => r.login);
-          }
+              // The Slack Channel ID you want to post in:
+              const CHANNEL_ID = 'C07TXJZ0T3L'; // Your actual channel ID
 
-          // Remove dupes
-          reviewers = [...new Set(reviewers)];
+              let reviewers = [];
+              let assignees = [];
 
-          // Notify each mapped reviewer
-          for (const reviewer of reviewers) {
-            const engineer = mapping.engineers.find(e => e.github_username === reviewer);
-            if (engineer) {
-              slack.chat.postMessage({
-                channel: C07TXJZ0T3L,
-                text: `Hey <@${engineer.slack_id}>, you've been assigned to review a PR: ${event.pull_request.html_url}`
-              })
-              .then(res => console.log("Slack sent to:", reviewer, res.ok))
-              .catch(err => console.error("Slack error for:", reviewer, err.data || err));
-            } else {
-              console.log(`No Slack mapping found for reviewer ${reviewer}`);
+              // If action is assigning a reviewer (PR event: review_requested)
+              if (event.action === 'review_requested' && event.requested_reviewer) {
+                // Single reviewer assigned
+                reviewers.push(event.requested_reviewer.login);
+              }
+              // If action is assigning an assignee (PR event: assigned)
+              else if (event.action === 'assigned' && event.assignee) {
+                assignees.push(event.assignee.login);
+              }
+              // If PR is opened or ready, get all requested reviewers and assignees
+              else if (event.pull_request) {
+                if (Array.isArray(event.pull_request.requested_reviewers)) {
+                  reviewers = event.pull_request.requested_reviewers.map(r => r.login);
+                }
+                if (Array.isArray(event.pull_request.assignees)) {
+                  assignees = event.pull_request.assignees.map(a => a.login);
+                }
+              }
+
+              // Remove dupes
+              reviewers = [...new Set(reviewers)];
+              assignees = [...new Set(assignees)];
+
+              // Notify each mapped reviewer
+              for (const reviewer of reviewers) {
+                const engineer = mapping.engineers.find(e => e.github_username === reviewer);
+                if (engineer) {
+                  try {
+                    const res = await slack.chat.postMessage({
+                      channel: CHANNEL_ID,
+                      text: `Hey <@${engineer.slack_id}>, you've been assigned to review a PR: ${event.pull_request.html_url}`
+                    });
+                    console.log("Slack sent to reviewer:", reviewer, res.ok);
+                  } catch (err) {
+                    console.error("Slack error for reviewer:", reviewer, err.data || err);
+                  }
+                } else {
+                  console.log(`No Slack mapping found for reviewer ${reviewer}`);
+                }
+              }
+
+              // Notify each mapped assignee
+              for (const assignee of assignees) {
+                const engineer = mapping.engineers.find(e => e.github_username === assignee);
+                if (engineer) {
+                  try {
+                    const res = await slack.chat.postMessage({
+                      channel: CHANNEL_ID,
+                      text: `Hey <@${engineer.slack_id}>, you've been assigned to a PR: ${event.pull_request.html_url}`
+                    });
+                    console.log("Slack sent to assignee:", assignee, res.ok);
+                  } catch (err) {
+                    console.error("Slack error for assignee:", assignee, err.data || err);
+                  }
+                } else {
+                  console.log(`No Slack mapping found for assignee ${assignee}`);
+                }
+              }
+            } catch (error) {
+              console.error('Script error:', error);
+              process.exit(1);
             }
           }
+
+          main();
           EOF
