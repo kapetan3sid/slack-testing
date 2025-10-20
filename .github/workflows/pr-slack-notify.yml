@@ -80,13 +80,44 @@ jobs:
                 return;
               }
               
+              // Debug: Try multiple channel formats
+              const channelOptions = [
+                'C07TXJZ0T3L',           // Original ID
+                '#general',              // Default channel
+                '#random'                // Another common channel
+              ];
+              
+              let successfulChannel = null;
+              
+              for (const channel of channelOptions) {
+                try {
+                  console.log(`🔍 Testing channel: ${channel}`);
+                  const testResult = await slack.chat.postMessage({
+                    channel: channel,
+                    text: `TEST: Channel ${channel} works! Bot can send here.`
+                  });
+                  console.log(`✅ SUCCESS with channel: ${channel}`);
+                  successfulChannel = channel;
+                  break;
+                } catch (err) {
+                  console.log(`❌ FAILED with channel ${channel}:`, err.data?.error || err.message);
+                }
+              }
+              
+              if (!successfulChannel) {
+                console.error('❌ No working channel found! Check bot permissions and channel IDs.');
+                return;
+              }
+              
+              console.log(`📤 Using working channel: ${successfulChannel} for notifications`);
+              
               // Send notifications
               for (const username of targetUsers) {
                 const engineer = mapping.engineers.find(e => e.github_username === username);
                 if (engineer) {
                   try {
                     const result = await slack.chat.postMessage({
-                      channel: CHANNEL_ID,
+                      channel: successfulChannel,
                       text: `Hey <@${engineer.slack_id}>, you have a PR to review: ${event.pull_request.html_url}`
                     });
                     console.log(`✅ Sent to ${username} (${engineer.slack_id}):`, result.ok);
