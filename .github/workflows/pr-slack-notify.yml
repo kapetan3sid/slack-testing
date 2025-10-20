@@ -1,0 +1,43 @@
+name: PR Slack Notify - Local Mapping
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, review_requested]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Slack SDK
+        run: npm install @slack/web-api
+
+      - name: Notify reviewers via Slack
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        run: |
+          node <<'EOF'
+          const { WebClient } = require('@slack/web-api');
+          const fs = require('fs');
+          const mapping = JSON.parse(fs.readFileSync('engineer-github-slack-mapping.json', 'utf8'));
+          const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
+
+          // You might want to get reviewers dynamically from the event payload (see below)
+          // For demo, just broadcast:
+          for (const engineer of mapping.engineers) {
+            slack.chat.postMessage({
+                channel: 'C07TXJZ0T3L', // Your channel's Slack ID
+                text: `Hey <@${engineer.slack_id}>, you have a PR to review!`
+            })      
+            .then(res => console.log("Sent:", res.ok, res.channel))
+            .catch(err => console.error("Error sending:", err.data));
+          }
+          EOF
+
