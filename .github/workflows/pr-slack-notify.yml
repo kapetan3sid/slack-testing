@@ -52,51 +52,75 @@ jobs:
               // The Slack Channel - your dedicated private channel
               const CHANNEL_ID = 'C07TXJZ0T3L'; // Your private channel (bot must be invited)
               
-              let targetUsers = [];
+              let reviewers = [];
+              let assignees = [];
               
               // Get reviewers and assignees based on event
               if (event.action === 'review_requested' && event.requested_reviewer) {
-                targetUsers.push(event.requested_reviewer.login);
+                reviewers.push(event.requested_reviewer.login);
                 console.log('Reviewer requested:', event.requested_reviewer.login);
               } else if (event.action === 'assigned' && event.assignee) {
-                targetUsers.push(event.assignee.login);
+                assignees.push(event.assignee.login);
                 console.log('Assignee added:', event.assignee.login);
               } else if (event.pull_request) {
                 // For opened/ready_for_review, notify all current reviewers and assignees
                 if (event.pull_request.requested_reviewers) {
-                  targetUsers.push(...event.pull_request.requested_reviewers.map(r => r.login));
+                  reviewers = event.pull_request.requested_reviewers.map(r => r.login);
                 }
                 if (event.pull_request.assignees) {
-                  targetUsers.push(...event.pull_request.assignees.map(a => a.login));
+                  assignees = event.pull_request.assignees.map(a => a.login);
                 }
               }
               
               // Remove duplicates
-              targetUsers = [...new Set(targetUsers)];
-              console.log('Target users:', targetUsers);
+              reviewers = [...new Set(reviewers)];
+              assignees = [...new Set(assignees)];
               
-              if (targetUsers.length === 0) {
+              console.log('Target reviewers:', reviewers);
+              console.log('Target assignees:', assignees);
+              
+              if (reviewers.length === 0 && assignees.length === 0) {
                 console.log('No target users found, skipping notifications');
                 return;
               }
               
-              // Send notifications to dedicated channel only
-              for (const username of targetUsers) {
+              // Send notifications to reviewers
+              for (const username of reviewers) {
                 const engineer = mapping.engineers.find(e => e.github_username === username);
                 if (engineer) {
                   try {
                     const result = await slack.chat.postMessage({
                       channel: CHANNEL_ID,
-                      text: `Hey <@${engineer.slack_id}>, you have a PR to review: ${event.pull_request.html_url}`
+                      text: `🔍 Hey <@${engineer.slack_id}>, you've been requested to **review** a PR: ${event.pull_request.html_url}`
                     });
-                    console.log(`✅ Sent to ${username} (${engineer.slack_id}) in channel ${CHANNEL_ID}:`, result.ok);
+                    console.log(`✅ Sent REVIEW notification to ${username} (${engineer.slack_id}) in channel ${CHANNEL_ID}:`, result.ok);
                   } catch (err) {
-                    console.error(`❌ FAILED to send to ${username} in channel ${CHANNEL_ID}:`, err.data?.error || err.message);
+                    console.error(`❌ FAILED to send review notification to ${username} in channel ${CHANNEL_ID}:`, err.data?.error || err.message);
                     console.error('🚫 ABORTING: Cannot deliver to dedicated channel');
-                    process.exit(1); // Abort the process
+                    process.exit(1);
                   }
                 } else {
-                  console.log(`⚠️ No Slack mapping found for ${username}`);
+                  console.log(`⚠️ No Slack mapping found for reviewer ${username}`);
+                }
+              }
+              
+              // Send notifications to assignees
+              for (const username of assignees) {
+                const engineer = mapping.engineers.find(e => e.github_username === username);
+                if (engineer) {
+                  try {
+                    const result = await slack.chat.postMessage({
+                      channel: CHANNEL_ID,
+                      text: `📝 Hey <@${engineer.slack_id}>, you've been **assigned** to work on a PR: ${event.pull_request.html_url}`
+                    });
+                    console.log(`✅ Sent ASSIGNMENT notification to ${username} (${engineer.slack_id}) in channel ${CHANNEL_ID}:`, result.ok);
+                  } catch (err) {
+                    console.error(`❌ FAILED to send assignment notification to ${username} in channel ${CHANNEL_ID}:`, err.data?.error || err.message);
+                    console.error('🚫 ABORTING: Cannot deliver to dedicated channel');
+                    process.exit(1);
+                  }
+                } else {
+                  console.log(`⚠️ No Slack mapping found for assignee ${username}`);
                 }
               }
             } catch (error) {
