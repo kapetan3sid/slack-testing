@@ -111,7 +111,7 @@ jobs:
                   try {
                     const result = await slack.chat.postMessage({
                       channel: CHANNEL_ID,
-                      text: `📝 Hey <@${engineer.slack_id}>, you've been **assigned** to work on a PR: ${event.pull_request.html_url}`
+                      text: `📝 Hey <@${engineer.slack_id}>, you've been **assigned** to a PR: ${event.pull_request.html_url}`
                     });
                     console.log(`✅ Sent ASSIGNMENT notification to ${username} (${engineer.slack_id}) in channel ${CHANNEL_ID}:`, result.ok);
                   } catch (err) {
