@@ -1,0 +1,192 @@
+name: PR Monitor - Multi Repo
+
+on:
+  schedule:
+    - cron: '* * * * *'  # Runs every minute
+  workflow_dispatch:  # Allows manual triggering
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install @octokit/rest @slack/web-api
+      - name: Monitor PRs across repositories
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        run: |
+          node <<'EOF'
+          const { Octokit } = require('@octokit/rest');
+          const { WebClient } = require('@slack/web-api');
+          const fs = require('fs');
+          
+          async function main() {
+            try {
+              console.log('🔍 Starting PR monitoring across repositories...');
+              
+              // Validate environment variables
+              if (!process.env.GITHUB_TOKEN) {
+                console.error('❌ GITHUB_TOKEN environment variable is required');
+                process.exit(1);
+              }
+              
+              if (!process.env.SLACK_BOT_TOKEN) {
+                console.error('❌ SLACK_BOT_TOKEN environment variable is required');
+                process.exit(1);
+              }
+              
+              // Initialize clients
+              const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
+              const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
+              
+              // Load engineer mapping
+              const mapping = JSON.parse(fs.readFileSync('engineer-github-slack-mapping.json', 'utf8'));
+              
+              // Repository configuration
+              const repos = [
+                {
+                  owner: 'polkadot-developers',
+                  repo: 'polkadot-docs',
+                  channel: 'C07TXJZ0T3L'  // Using same channel for testing
+                },
+                {
+                  owner: 'wormhole-foundation',
+                  repo: 'wormhole-docs',
+                  channel: 'C07TXJZ0T3L'
+                },
+                {
+                  owner: 'kluster-ai',
+                  repo: 'docs',
+                  channel: 'C07TXJZ0T3L'
+                },
+                {
+                  owner: 'moondance-labs',
+                  repo: 'tanssi-docs',
+                  channel: 'C07TXJZ0T3L'
+                },
+                {
+                  owner: 'moonbeam-foundation',
+                  repo: 'moonbeam-docs',
+                  channel: 'C07TXJZ0T3L'
+                }
+              ];
+              
+              console.log(`📊 Monitoring ${repos.length} repositories...`);
+              
+              // Track state to avoid duplicate notifications
+              let stateFile = {};
+              try {
+                stateFile = JSON.parse(fs.readFileSync('/tmp/pr-monitor-state.json', 'utf8'));
+              } catch (err) {
+                console.log('📝 Creating new state file...');
+                stateFile = {};
+              }
+              
+              let totalNotifications = 0;
+              
+              // Monitor each repository
+              for (const repoConfig of repos) {
+                try {
+                  console.log(`\n🔍 Checking ${repoConfig.owner}/${repoConfig.repo}...`);
+                  
+                  // Get open PRs
+                  const { data: pulls } = await octokit.pulls.list({
+                    owner: repoConfig.owner,
+                    repo: repoConfig.repo,
+                    state: 'open',
+                    per_page: 50
+                  });
+                  
+                  console.log(`   📋 Found ${pulls.length} open PRs`);
+                  
+                  for (const pr of pulls) {
+                    const prKey = `${repoConfig.owner}/${repoConfig.repo}#${pr.number}`;
+                    
+                    // Get current reviewers and assignees
+                    const currentReviewers = pr.requested_reviewers?.map(r => r.login) || [];
+                    const currentAssignees = pr.assignees?.map(a => a.login) || [];
+                    
+                    // Get previous state
+                    const prevState = stateFile[prKey] || { reviewers: [], assignees: [] };
+                    
+                    // Find new reviewers (not in previous state)
+                    const newReviewers = currentReviewers.filter(r => !prevState.reviewers.includes(r));
+                    const newAssignees = currentAssignees.filter(a => !prevState.assignees.includes(a));
+                    
+                    // Send notifications for new reviewers
+                    for (const username of newReviewers) {
+                      const engineer = mapping.engineers.find(e => e.github_username === username);
+                      if (engineer) {
+                        try {
+                          await slack.chat.postMessage({
+                            channel: repoConfig.channel,
+                            text: `🔍 Hey <@${engineer.slack_id}>, you've been requested to **review** a PR in ${repoConfig.owner}/${repoConfig.repo}: ${pr.html_url}`
+                          });
+                          console.log(`   ✅ Sent REVIEW notification to ${username} for PR #${pr.number}`);
+                          totalNotifications++;
+                        } catch (err) {
+                          console.error(`   ❌ Failed to send review notification to ${username}:`, err.data?.error || err.message);
+                        }
+                      } else {
+                        console.log(`   ⚠️ No Slack mapping found for reviewer ${username}`);
+                      }
+                    }
+                    
+                    // Send notifications for new assignees
+                    for (const username of newAssignees) {
+                      const engineer = mapping.engineers.find(e => e.github_username === username);
+                      if (engineer) {
+                        try {
+                          await slack.chat.postMessage({
+                            channel: repoConfig.channel,
+                            text: `📝 Hey <@${engineer.slack_id}>, you've been **assigned** to work on a PR in ${repoConfig.owner}/${repoConfig.repo}: ${pr.html_url}`
+                          });
+                          console.log(`   ✅ Sent ASSIGNMENT notification to ${username} for PR #${pr.number}`);
+                          totalNotifications++;
+                        } catch (err) {
+                          console.error(`   ❌ Failed to send assignment notification to ${username}:`, err.data?.error || err.message);
+                        }
+                      } else {
+                        console.log(`   ⚠️ No Slack mapping found for assignee ${username}`);
+                      }
+                    }
+                    
+                    // Update state
+                    stateFile[prKey] = {
+                      reviewers: currentReviewers,
+                      assignees: currentAssignees,
+                      lastChecked: new Date().toISOString()
+                    };
+                  }
+                  
+                } catch (err) {
+                  console.error(`❌ Error checking ${repoConfig.owner}/${repoConfig.repo}:`, err.message);
+                  // Continue with other repos even if one fails
+                }
+              }
+              
+              // Clean up old PRs from state (older than 7 days)
+              const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+              for (const [prKey, prState] of Object.entries(stateFile)) {
+                if (new Date(prState.lastChecked) < oneWeekAgo) {
+                  delete stateFile[prKey];
+                }
+              }
+              
+              // Save state
+              fs.writeFileSync('/tmp/pr-monitor-state.json', JSON.stringify(stateFile, null, 2));
+              
+              console.log(`\n🎉 Monitoring complete! Sent ${totalNotifications} notifications across ${repos.length} repositories.`);
+              
+            } catch (error) {
+              console.error('💥 Script error:', error);
+              process.exit(1);
+            }
+          }
+          
+          main();
+          EOF
