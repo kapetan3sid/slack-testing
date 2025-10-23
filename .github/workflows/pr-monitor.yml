@@ -67,7 +67,7 @@ jobs:
                 {
                   owner: 'kluster-ai',
                   repo: 'docs',
-                  channel: 'C07T4JN3MPD'
+                  channel: 'C09NAQ5PKAQ'
                 },
                 {
                   owner: 'moondance-labs',
