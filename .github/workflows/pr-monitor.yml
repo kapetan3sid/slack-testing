@@ -135,8 +135,8 @@ jobs:
                       continue;
                     }
                     
-                    // Find recent assignment events (since last run or last 2 hours for first run)
-                    const cutoffTime = lastRunTime || new Date(Date.now() - 2 * 60 * 60 * 1000);
+                    // Find recent assignment events (since last run or last 5 minutes for first run)
+                    const cutoffTime = lastRunTime || new Date(Date.now() - 5 * 60 * 1000);
                     console.log(`     📅 Looking for assignments since: ${cutoffTime.toISOString()}`);
                     
                     const recentAssignmentEvents = timelineEvents.filter(event => {
