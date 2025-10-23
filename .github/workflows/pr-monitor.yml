@@ -70,13 +70,18 @@ jobs:
                   channel: 'C07TXJZ0T3L'
                 },
                 {
-                  owner: 'paritytech',
-                  repo: 'polkadot-sdk',
+                  owner: 'moondance-labs',
+                  repo: 'tanssi-docs',
                   channel: 'C07TXJZ0T3L'
                 },
                 {
-                  owner: 'ethereumjs',
-                  repo: 'ethereumjs-monorepo',
+                  owner: 'moonbeam-foundation',
+                  repo: 'moonbeam-docs',
+                  channel: 'C07TXJZ0T3L'
+                },
+                {
+                  owner: 'datahaven-xyz',
+                  repo: 'datahaven-docs',
                   channel: 'C07TXJZ0T3L'
                 }
               ];
