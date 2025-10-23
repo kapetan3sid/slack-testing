@@ -2,8 +2,8 @@ name: PR Monitor - Multi Repo (Timeline Based)
 
 on:
   schedule:
-    # Run every minute
-    - cron: '* * * * *'
+    # Run every 5 minutes (more reliable than every minute)
+    - cron: '*/5 * * * *'
   workflow_dispatch:  # Allow manual trigger for testing
 
 jobs:
