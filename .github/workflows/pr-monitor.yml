@@ -57,32 +57,32 @@ jobs:
                 {
                   owner: 'polkadot-developers',
                   repo: 'polkadot-docs',
-                  channel: 'C07TXJZ0T3L'  // Using same channel for testing
+                  channel: 'C078NM8F5GC'  // Using same channel for testing
                 },
                 {
                   owner: 'wormhole-foundation',
                   repo: 'wormhole-docs',
-                  channel: 'C07TXJZ0T3L'
+                  channel: 'C0785L923U7'
                 },
                 {
                   owner: 'kluster-ai',
                   repo: 'docs',
-                  channel: 'C07TXJZ0T3L'
+                  channel: 'C07T4JN3MPD'
                 },
                 {
                   owner: 'moondance-labs',
                   repo: 'tanssi-docs',
-                  channel: 'C07TXJZ0T3L'
+                  channel: 'C078L7FGKK4'
                 },
                 {
                   owner: 'moonbeam-foundation',
                   repo: 'moonbeam-docs',
-                  channel: 'C07TXJZ0T3L'
+                  channel: 'C078HACQE3F'
                 },
                 {
                   owner: 'datahaven-xyz',
                   repo: 'datahaven-docs',
-                  channel: 'C07TXJZ0T3L'
+                  channel: 'C08RXH70ZAT'
                 }
               ];
               
@@ -185,7 +185,7 @@ jobs:
                         const notificationType = notificationTypes.get(username);
                         const isAssignment = notificationType === 'assigned';
                         const emoji = isAssignment ? '📝' : '🔍';
-                        const action = isAssignment ? '**assigned** to work on' : 'requested to **review**';
+                        const action = isAssignment ? 'assigned to' : 'requested to review';
                         
                         try {
                           await slack.chat.postMessage({
