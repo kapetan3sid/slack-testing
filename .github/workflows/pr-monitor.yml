@@ -2,8 +2,9 @@ name: PR Monitor - Multi Repo
 
 on:
   schedule:
-    - cron: '*/5 * * * *'  # Runs every 5 minutes (more reliable)
-  workflow_dispatch:  # Allows manual triggering
+    # Run every minute
+    - cron: '* * * * *'
+  workflow_dispatch:  # Allow manual trigger for testing
 
 jobs:
   monitor:
@@ -141,17 +142,21 @@ jobs:
                     console.log(`     NEW assignees: [${newAssignees.join(', ')}]`);
                     console.log(`     Last run time exists: ${!!lastRunTime}`);
                     
-                    // Only proceed if there are new assignments AND we have a lastRunTime
-                    // (Skip notifications on first run to avoid old assignments)
-                    const shouldNotify = lastRunTime && (newReviewers.length > 0 || newAssignees.length > 0);
+                    // Only proceed if there are new assignments AND either:
+                    // 1. We have a lastRunTime (not first run), OR
+                    // 2. This is first run but PR was updated recently (within 2 hours)
+                    const isRecentlyUpdated = new Date(pr.updated_at) > new Date(Date.now() - 2 * 60 * 60 * 1000); // 2 hours ago
+                    const shouldNotify = (newReviewers.length > 0 || newAssignees.length > 0) && 
+                                       (lastRunTime || isRecentlyUpdated);
                     
-                    console.log(`     Should notify: ${shouldNotify}`);
+                    console.log(`     Should notify: ${shouldNotify} (hasLastRunTime: ${!!lastRunTime}, isRecentlyUpdated: ${isRecentlyUpdated})`);
+                    console.log(`     PR updated at: ${pr.updated_at}`);
                     
                     if (!shouldNotify && (newReviewers.length > 0 || newAssignees.length > 0)) {
-                      console.log(`   ⏭️ Skipping notifications for PR #${pr.number} (first run or no baseline)`);
+                      console.log(`   ⏭️ Skipping notifications for PR #${pr.number} (old assignment, updated: ${pr.updated_at})`);
                     }
                     
-                    // Send notifications for new reviewers (only if not first run)
+                    // Send notifications for new reviewers
                     if (shouldNotify) {
                       for (const username of newReviewers) {
                         const engineer = mapping.engineers.find(e => e.github_username === username);
@@ -171,7 +176,7 @@ jobs:
                         }
                       }
                       
-                      // Send notifications for new assignees (only if not first run)
+                      // Send notifications for new assignees
                       for (const username of newAssignees) {
                         const engineer = mapping.engineers.find(e => e.github_username === username);
                         if (engineer) {
