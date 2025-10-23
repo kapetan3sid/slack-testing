@@ -1,4 +1,4 @@
-name: PR Monitor - Multi Repo
+name: PR Monitor - Multi Repo (Timeline Based)
 
 on:
   schedule:
@@ -14,15 +14,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - run: npm install @octokit/rest @slack/web-api
+      
       - name: Monitor PRs across repositories
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
         run: |
-          node <<'EOF'
-          const { Octokit } = require('@octokit/rest');
-          const { WebClient } = require('@slack/web-api');
+          npm install @slack/web-api @octokit/rest
+          
+          node << 'EOF'
           const fs = require('fs');
           
           async function main() {
@@ -44,8 +44,8 @@ jobs:
               }
               
               // Initialize clients
-              const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
-              const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
+              const octokit = new (require('@octokit/rest')).Octokit({ auth: process.env.GITHUB_TOKEN });
+              const slack = new (require('@slack/web-api')).WebClient(process.env.SLACK_BOT_TOKEN);
               
               // Load engineer mapping
               const mapping = JSON.parse(fs.readFileSync('engineer-github-slack-mapping.json', 'utf8'));
@@ -68,13 +68,13 @@ jobs:
                   channel: 'C07TXJZ0T3L'
                 },
                 {
-                  owner: 'moondance-labs',
-                  repo: 'tanssi-docs',
+                  owner: 'paritytech',
+                  repo: 'polkadot-sdk',
                   channel: 'C07TXJZ0T3L'
                 },
                 {
-                  owner: 'moonbeam-foundation',
-                  repo: 'moonbeam-docs',
+                  owner: 'ethereumjs',
+                  repo: 'ethereumjs-monorepo',
                   channel: 'C07TXJZ0T3L'
                 }
               ];
@@ -83,125 +83,117 @@ jobs:
               
               // Get last run time from state file
               let lastRunTime = null;
-              let stateFile = {};
               try {
                 const state = JSON.parse(fs.readFileSync('/tmp/pr-monitor-state.json', 'utf8'));
-                stateFile = state.prs || {};
                 lastRunTime = state.lastRunTime ? new Date(state.lastRunTime) : null;
-                console.log(`📂 Loaded state file with ${Object.keys(stateFile).length} PR states`);
+                console.log(`📂 Loaded state file`);
                 console.log(`🕐 Last run time: ${lastRunTime ? lastRunTime.toISOString() : 'null (first run)'}`);
               } catch (err) {
                 console.log('📝 Creating new state file (first run)...');
-                stateFile = {};
               }
               
               const currentRunTime = new Date();
               console.log(`⏰ Last run: ${lastRunTime ? lastRunTime.toISOString() : 'Never'}`);
-              console.log(`⏰ Current run: ${currentRunTime.toISOString()}`);
+              console.log(`🚀 Current run: ${currentRunTime.toISOString()}`);
               
               let totalNotifications = 0;
               
-              // Monitor each repository
+              // Process each repository
               for (const repoConfig of repos) {
                 try {
-                  console.log(`\n🔍 Checking ${repoConfig.owner}/${repoConfig.repo}...`);
+                  console.log(`\n📁 Checking ${repoConfig.owner}/${repoConfig.repo}...`);
                   
-                  // Get open PRs (excluding drafts)
-                  const { data: pulls } = await octokit.pulls.list({
+                  // Get open PRs
+                  const { data: pulls } = await octokit.rest.pulls.list({
                     owner: repoConfig.owner,
                     repo: repoConfig.repo,
                     state: 'open',
                     per_page: 50
                   });
                   
+                  console.log(`   Found ${pulls.length} open PRs`);
+                  
                   // Filter out draft PRs
                   const nonDraftPulls = pulls.filter(pr => !pr.draft);
-                  console.log(`   📋 Found ${pulls.length} open PRs (${nonDraftPulls.length} non-draft)`);
+                  console.log(`   ${nonDraftPulls.length} non-draft PRs to check`);
                   
                   for (const pr of nonDraftPulls) {
-                    const prKey = `${repoConfig.owner}/${repoConfig.repo}#${pr.number}`;
+                    console.log(`\n   🔍 PR #${pr.number}: "${pr.title}"`);
                     
-                    // Get current reviewers and assignees
-                    const currentReviewers = pr.requested_reviewers?.map(r => r.login) || [];
-                    const currentAssignees = pr.assignees?.map(a => a.login) || [];
-                    
-                    console.log(`   🔍 PR #${pr.number}: "${pr.title}"`);
-                    console.log(`     Current reviewers: [${currentReviewers.join(', ')}]`);
-                    console.log(`     Current assignees: [${currentAssignees.join(', ')}]`);
-                    
-                    // Get previous state
-                    const prevState = stateFile[prKey] || { reviewers: [], assignees: [] };
-                    console.log(`     Previous reviewers: [${prevState.reviewers.join(', ')}]`);
-                    console.log(`     Previous assignees: [${prevState.assignees.join(', ')}]`);
-                    
-                    // Find new reviewers and assignees
-                    const newReviewers = currentReviewers.filter(r => !prevState.reviewers.includes(r));
-                    const newAssignees = currentAssignees.filter(a => !prevState.assignees.includes(a));
-                    
-                    console.log(`     NEW reviewers: [${newReviewers.join(', ')}]`);
-                    console.log(`     NEW assignees: [${newAssignees.join(', ')}]`);
-                    console.log(`     Last run time exists: ${!!lastRunTime}`);
-                    
-                    // Only proceed if there are new assignments AND either:
-                    // 1. We have a lastRunTime (not first run), OR
-                    // 2. This is first run but PR was updated recently (within 2 hours)
-                    const isRecentlyUpdated = new Date(pr.updated_at) > new Date(Date.now() - 2 * 60 * 60 * 1000); // 2 hours ago
-                    const shouldNotify = (newReviewers.length > 0 || newAssignees.length > 0) && 
-                                       (lastRunTime || isRecentlyUpdated);
-                    
-                    console.log(`     Should notify: ${shouldNotify} (hasLastRunTime: ${!!lastRunTime}, isRecentlyUpdated: ${isRecentlyUpdated})`);
-                    console.log(`     PR updated at: ${pr.updated_at}`);
-                    
-                    if (!shouldNotify && (newReviewers.length > 0 || newAssignees.length > 0)) {
-                      console.log(`   ⏭️ Skipping notifications for PR #${pr.number} (old assignment, updated: ${pr.updated_at})`);
+                    // Get PR timeline to check when assignments happened
+                    let timelineEvents = [];
+                    try {
+                      const { data: timeline } = await octokit.rest.issues.listEventsForTimeline({
+                        owner: repoConfig.owner,
+                        repo: repoConfig.repo,
+                        issue_number: pr.number,
+                        per_page: 100
+                      });
+                      timelineEvents = timeline;
+                    } catch (err) {
+                      console.error(`     ❌ Failed to get timeline for PR #${pr.number}:`, err.message);
+                      continue;
                     }
                     
-                    // Send notifications for new reviewers
-                    if (shouldNotify) {
-                      for (const username of newReviewers) {
-                        const engineer = mapping.engineers.find(e => e.github_username === username);
-                        if (engineer) {
-                          try {
-                            await slack.chat.postMessage({
-                              channel: repoConfig.channel,
-                              text: `🔍 Hey <@${engineer.slack_id}>, you've been requested to **review** a PR in ${repoConfig.owner}/${repoConfig.repo}: ${pr.html_url}`
-                            });
-                            console.log(`   ✅ Sent REVIEW notification to ${username} for PR #${pr.number}`);
-                            totalNotifications++;
-                          } catch (err) {
-                            console.error(`   ❌ Failed to send review notification to ${username}:`, err.data?.error || err.message);
-                          }
-                        } else {
-                          console.log(`   ⚠️ No Slack mapping found for reviewer ${username}`);
-                        }
-                      }
+                    // Find recent assignment events (since last run or last 2 hours for first run)
+                    const cutoffTime = lastRunTime || new Date(Date.now() - 2 * 60 * 60 * 1000);
+                    console.log(`     📅 Looking for assignments since: ${cutoffTime.toISOString()}`);
+                    
+                    const recentAssignmentEvents = timelineEvents.filter(event => {
+                      const eventTime = new Date(event.created_at);
+                      return eventTime > cutoffTime && 
+                             (event.event === 'assigned' || 
+                              event.event === 'review_requested');
+                    });
+                    
+                    console.log(`     📋 Found ${recentAssignmentEvents.length} recent assignment events`);
+                    
+                    // Process recent assignment events and collect users to notify
+                    const usersToNotify = new Set();
+                    const notificationTypes = new Map(); // user -> 'assigned' or 'review_requested'
+                    
+                    for (const event of recentAssignmentEvents) {
+                      console.log(`       Event: ${event.event} at ${event.created_at}`);
                       
-                      // Send notifications for new assignees
-                      for (const username of newAssignees) {
-                        const engineer = mapping.engineers.find(e => e.github_username === username);
-                        if (engineer) {
-                          try {
-                            await slack.chat.postMessage({
-                              channel: repoConfig.channel,
-                              text: `📝 Hey <@${engineer.slack_id}>, you've been **assigned** to work on a PR in ${repoConfig.owner}/${repoConfig.repo}: ${pr.html_url}`
-                            });
-                            console.log(`   ✅ Sent ASSIGNMENT notification to ${username} for PR #${pr.number}`);
-                            totalNotifications++;
-                          } catch (err) {
-                            console.error(`   ❌ Failed to send assignment notification to ${username}:`, err.data?.error || err.message);
-                          }
-                        } else {
-                          console.log(`   ⚠️ No Slack mapping found for assignee ${username}`);
+                      if (event.event === 'assigned' && event.assignee) {
+                        console.log(`         → User ${event.assignee.login} was assigned`);
+                        usersToNotify.add(event.assignee.login);
+                        notificationTypes.set(event.assignee.login, 'assigned');
+                      } else if (event.event === 'review_requested' && event.requested_reviewer) {
+                        const reviewer = event.requested_reviewer.login;
+                        if (reviewer) {
+                          console.log(`         → User ${reviewer} was requested to review`);
+                          usersToNotify.add(reviewer);
+                          notificationTypes.set(reviewer, 'review_requested');
                         }
                       }
                     }
                     
-                    // Update state
-                    stateFile[prKey] = {
-                      reviewers: currentReviewers,
-                      assignees: currentAssignees,
-                      lastChecked: new Date().toISOString()
-                    };
+                    console.log(`     🎯 Users to notify: [${Array.from(usersToNotify).join(', ')}]`);
+                    
+                    // Send notifications
+                    for (const username of usersToNotify) {
+                      const engineer = mapping.engineers.find(e => e.github_username === username);
+                      if (engineer) {
+                        const notificationType = notificationTypes.get(username);
+                        const isAssignment = notificationType === 'assigned';
+                        const emoji = isAssignment ? '📝' : '🔍';
+                        const action = isAssignment ? '**assigned** to work on' : 'requested to **review**';
+                        
+                        try {
+                          await slack.chat.postMessage({
+                            channel: repoConfig.channel,
+                            text: `${emoji} Hey <@${engineer.slack_id}>, you've been ${action} a PR in ${repoConfig.owner}/${repoConfig.repo}: ${pr.html_url}`
+                          });
+                          console.log(`       ✅ Sent ${notificationType.toUpperCase()} notification to ${username} for PR #${pr.number}`);
+                          totalNotifications++;
+                        } catch (err) {
+                          console.error(`       ❌ Failed to send notification to ${username}:`, err.data?.error || err.message);
+                        }
+                      } else {
+                        console.log(`       ⚠️ No Slack mapping found for user ${username}`);
+                      }
+                    }
                   }
                   
                 } catch (err) {
@@ -210,25 +202,19 @@ jobs:
                 }
               }
               
-              // Clean up old PRs from state (older than 7 days)
-              const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-              for (const [prKey, prState] of Object.entries(stateFile)) {
-                if (new Date(prState.lastChecked) < oneWeekAgo) {
-                  delete stateFile[prKey];
-                }
-              }
-              
-              // Save state with current run time
+              // Save current run time for next iteration
               const newState = {
-                lastRunTime: currentRunTime.toISOString(),
-                prs: stateFile
+                lastRunTime: currentRunTime.toISOString()
               };
-              fs.writeFileSync('/tmp/pr-monitor-state.json', JSON.stringify(newState, null, 2));
               
-              console.log(`\n🎉 Monitoring complete! Sent ${totalNotifications} notifications across ${repos.length} repositories.`);
+              fs.writeFileSync('/tmp/pr-monitor-state.json', JSON.stringify(newState, null, 2));
+              console.log(`\n💾 Saved state with current run time: ${currentRunTime.toISOString()}`);
+              
+              console.log(`\n🎉 Monitoring complete!`);
+              console.log(`📢 Total notifications sent: ${totalNotifications}`);
               
             } catch (error) {
-              console.error('💥 Script error:', error);
+              console.error('💥 Fatal error:', error);
               process.exit(1);
             }
           }
