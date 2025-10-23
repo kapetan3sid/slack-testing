@@ -28,6 +28,9 @@ jobs:
             try {
               console.log('🔍 Starting PR monitoring across repositories...');
               
+              const currentTime = Date.now();
+              console.log(`⏰ Current time: ${new Date(currentTime).toISOString()}`);
+              
               // Validate environment variables
               if (!process.env.GITHUB_TOKEN) {
                 console.error('❌ GITHUB_TOKEN environment variable is required');
@@ -84,8 +87,10 @@ jobs:
                 const state = JSON.parse(fs.readFileSync('/tmp/pr-monitor-state.json', 'utf8'));
                 stateFile = state.prs || {};
                 lastRunTime = state.lastRunTime ? new Date(state.lastRunTime) : null;
+                console.log(`📂 Loaded state file with ${Object.keys(stateFile).length} PR states`);
+                console.log(`🕐 Last run time: ${lastRunTime ? lastRunTime.toISOString() : 'null (first run)'}`);
               } catch (err) {
-                console.log('📝 Creating new state file...');
+                console.log('📝 Creating new state file (first run)...');
                 stateFile = {};
               }
               
@@ -119,16 +124,28 @@ jobs:
                     const currentReviewers = pr.requested_reviewers?.map(r => r.login) || [];
                     const currentAssignees = pr.assignees?.map(a => a.login) || [];
                     
+                    console.log(`   🔍 PR #${pr.number}: "${pr.title}"`);
+                    console.log(`     Current reviewers: [${currentReviewers.join(', ')}]`);
+                    console.log(`     Current assignees: [${currentAssignees.join(', ')}]`);
+                    
                     // Get previous state
                     const prevState = stateFile[prKey] || { reviewers: [], assignees: [] };
+                    console.log(`     Previous reviewers: [${prevState.reviewers.join(', ')}]`);
+                    console.log(`     Previous assignees: [${prevState.assignees.join(', ')}]`);
                     
                     // Find new reviewers and assignees
                     const newReviewers = currentReviewers.filter(r => !prevState.reviewers.includes(r));
                     const newAssignees = currentAssignees.filter(a => !prevState.assignees.includes(a));
                     
+                    console.log(`     NEW reviewers: [${newReviewers.join(', ')}]`);
+                    console.log(`     NEW assignees: [${newAssignees.join(', ')}]`);
+                    console.log(`     Last run time exists: ${!!lastRunTime}`);
+                    
                     // Only proceed if there are new assignments AND we have a lastRunTime
                     // (Skip notifications on first run to avoid old assignments)
                     const shouldNotify = lastRunTime && (newReviewers.length > 0 || newAssignees.length > 0);
+                    
+                    console.log(`     Should notify: ${shouldNotify}`);
                     
                     if (!shouldNotify && (newReviewers.length > 0 || newAssignees.length > 0)) {
                       console.log(`   ⏭️ Skipping notifications for PR #${pr.number} (first run or no baseline)`);
