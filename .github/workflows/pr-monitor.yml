@@ -5,6 +5,8 @@ on:
     # Run every 5 minutes (more reliable than every minute)
     - cron: '*/5 * * * *'
   workflow_dispatch:  # Allow manual trigger for testing
+  push:
+    branches: [ main ]  # Trigger on push to force first run
 
 jobs:
   monitor:
