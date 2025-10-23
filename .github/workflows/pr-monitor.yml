@@ -2,7 +2,7 @@ name: PR Monitor - Multi Repo
 
 on:
   schedule:
-    - cron: '* * * * *'  # Runs every minute
+    - cron: '*/5 * * * *'  # Runs every 5 minutes (more reliable)
   workflow_dispatch:  # Allows manual triggering
 
 jobs:
@@ -77,14 +77,21 @@ jobs:
               
               console.log(`📊 Monitoring ${repos.length} repositories...`);
               
-              // Track state to avoid duplicate notifications
+              // Get last run time from state file
+              let lastRunTime = null;
               let stateFile = {};
               try {
-                stateFile = JSON.parse(fs.readFileSync('/tmp/pr-monitor-state.json', 'utf8'));
+                const state = JSON.parse(fs.readFileSync('/tmp/pr-monitor-state.json', 'utf8'));
+                stateFile = state.prs || {};
+                lastRunTime = state.lastRunTime ? new Date(state.lastRunTime) : null;
               } catch (err) {
                 console.log('📝 Creating new state file...');
                 stateFile = {};
               }
+              
+              const currentRunTime = new Date();
+              console.log(`⏰ Last run: ${lastRunTime ? lastRunTime.toISOString() : 'Never'}`);
+              console.log(`⏰ Current run: ${currentRunTime.toISOString()}`);
               
               let totalNotifications = 0;
               
@@ -93,7 +100,7 @@ jobs:
                 try {
                   console.log(`\n🔍 Checking ${repoConfig.owner}/${repoConfig.repo}...`);
                   
-                  // Get open PRs
+                  // Get open PRs (excluding drafts)
                   const { data: pulls } = await octokit.pulls.list({
                     owner: repoConfig.owner,
                     repo: repoConfig.repo,
@@ -101,9 +108,11 @@ jobs:
                     per_page: 50
                   });
                   
-                  console.log(`   📋 Found ${pulls.length} open PRs`);
+                  // Filter out draft PRs
+                  const nonDraftPulls = pulls.filter(pr => !pr.draft);
+                  console.log(`   📋 Found ${pulls.length} open PRs (${nonDraftPulls.length} non-draft)`);
                   
-                  for (const pr of pulls) {
+                  for (const pr of nonDraftPulls) {
                     const prKey = `${repoConfig.owner}/${repoConfig.repo}#${pr.number}`;
                     
                     // Get current reviewers and assignees
@@ -113,45 +122,55 @@ jobs:
                     // Get previous state
                     const prevState = stateFile[prKey] || { reviewers: [], assignees: [] };
                     
-                    // Find new reviewers (not in previous state)
+                    // Find new reviewers and assignees
                     const newReviewers = currentReviewers.filter(r => !prevState.reviewers.includes(r));
                     const newAssignees = currentAssignees.filter(a => !prevState.assignees.includes(a));
                     
-                    // Send notifications for new reviewers
-                    for (const username of newReviewers) {
-                      const engineer = mapping.engineers.find(e => e.github_username === username);
-                      if (engineer) {
-                        try {
-                          await slack.chat.postMessage({
-                            channel: repoConfig.channel,
-                            text: `🔍 Hey <@${engineer.slack_id}>, you've been requested to **review** a PR in ${repoConfig.owner}/${repoConfig.repo}: ${pr.html_url}`
-                          });
-                          console.log(`   ✅ Sent REVIEW notification to ${username} for PR #${pr.number}`);
-                          totalNotifications++;
-                        } catch (err) {
-                          console.error(`   ❌ Failed to send review notification to ${username}:`, err.data?.error || err.message);
-                        }
-                      } else {
-                        console.log(`   ⚠️ No Slack mapping found for reviewer ${username}`);
-                      }
+                    // Only proceed if there are new assignments AND we have a lastRunTime
+                    // (Skip notifications on first run to avoid old assignments)
+                    const shouldNotify = lastRunTime && (newReviewers.length > 0 || newAssignees.length > 0);
+                    
+                    if (!shouldNotify && (newReviewers.length > 0 || newAssignees.length > 0)) {
+                      console.log(`   ⏭️ Skipping notifications for PR #${pr.number} (first run or no baseline)`);
                     }
                     
-                    // Send notifications for new assignees
-                    for (const username of newAssignees) {
-                      const engineer = mapping.engineers.find(e => e.github_username === username);
-                      if (engineer) {
-                        try {
-                          await slack.chat.postMessage({
-                            channel: repoConfig.channel,
-                            text: `📝 Hey <@${engineer.slack_id}>, you've been **assigned** to work on a PR in ${repoConfig.owner}/${repoConfig.repo}: ${pr.html_url}`
-                          });
-                          console.log(`   ✅ Sent ASSIGNMENT notification to ${username} for PR #${pr.number}`);
-                          totalNotifications++;
-                        } catch (err) {
-                          console.error(`   ❌ Failed to send assignment notification to ${username}:`, err.data?.error || err.message);
+                    // Send notifications for new reviewers (only if not first run)
+                    if (shouldNotify) {
+                      for (const username of newReviewers) {
+                        const engineer = mapping.engineers.find(e => e.github_username === username);
+                        if (engineer) {
+                          try {
+                            await slack.chat.postMessage({
+                              channel: repoConfig.channel,
+                              text: `🔍 Hey <@${engineer.slack_id}>, you've been requested to **review** a PR in ${repoConfig.owner}/${repoConfig.repo}: ${pr.html_url}`
+                            });
+                            console.log(`   ✅ Sent REVIEW notification to ${username} for PR #${pr.number}`);
+                            totalNotifications++;
+                          } catch (err) {
+                            console.error(`   ❌ Failed to send review notification to ${username}:`, err.data?.error || err.message);
+                          }
+                        } else {
+                          console.log(`   ⚠️ No Slack mapping found for reviewer ${username}`);
                         }
-                      } else {
-                        console.log(`   ⚠️ No Slack mapping found for assignee ${username}`);
+                      }
+                      
+                      // Send notifications for new assignees (only if not first run)
+                      for (const username of newAssignees) {
+                        const engineer = mapping.engineers.find(e => e.github_username === username);
+                        if (engineer) {
+                          try {
+                            await slack.chat.postMessage({
+                              channel: repoConfig.channel,
+                              text: `📝 Hey <@${engineer.slack_id}>, you've been **assigned** to work on a PR in ${repoConfig.owner}/${repoConfig.repo}: ${pr.html_url}`
+                            });
+                            console.log(`   ✅ Sent ASSIGNMENT notification to ${username} for PR #${pr.number}`);
+                            totalNotifications++;
+                          } catch (err) {
+                            console.error(`   ❌ Failed to send assignment notification to ${username}:`, err.data?.error || err.message);
+                          }
+                        } else {
+                          console.log(`   ⚠️ No Slack mapping found for assignee ${username}`);
+                        }
                       }
                     }
                     
@@ -177,8 +196,12 @@ jobs:
                 }
               }
               
-              // Save state
-              fs.writeFileSync('/tmp/pr-monitor-state.json', JSON.stringify(stateFile, null, 2));
+              // Save state with current run time
+              const newState = {
+                lastRunTime: currentRunTime.toISOString(),
+                prs: stateFile
+              };
+              fs.writeFileSync('/tmp/pr-monitor-state.json', JSON.stringify(newState, null, 2));
               
               console.log(`\n🎉 Monitoring complete! Sent ${totalNotifications} notifications across ${repos.length} repositories.`);
               
