@@ -1,12 +1,12 @@
 name: PR Monitor - Multi Repo (Timeline Based)
 
 on:
-  # schedule:
-  #   # Run every hour (disabled - moved to another repo)
-  #   - cron: '0 * * * *'
+  schedule:
+    # Run every hour
+    - cron: '0 * * * *'
   workflow_dispatch:  # Allow manual trigger for testing
-  # push:
-  #   branches: [ main ]  # Trigger on push to force first run (disabled)
+  push:
+    branches: [ main ]  # Trigger on push to force first run
 
 jobs:
   monitor:
@@ -57,32 +57,32 @@ jobs:
                 {
                   owner: 'polkadot-developers',
                   repo: 'polkadot-docs',
-                  channel: 'C078NM8F5GC'  // Using same channel for testing
+                  channel: 'C07TXJZ0T3L'  // Using same channel for testing
                 },
                 {
                   owner: 'wormhole-foundation',
                   repo: 'wormhole-docs',
-                  channel: 'C0785L923U7'
+                  channel: 'C07TXJZ0T3L'
                 },
                 {
                   owner: 'kluster-ai',
                   repo: 'docs',
-                  channel: 'C09NAQ5PKAQ'
+                  channel: 'C07TXJZ0T3L'
                 },
                 {
                   owner: 'moondance-labs',
                   repo: 'tanssi-docs',
-                  channel: 'C078L7FGKK4'
+                  channel: 'C07TXJZ0T3L'
                 },
                 {
                   owner: 'moonbeam-foundation',
                   repo: 'moonbeam-docs',
-                  channel: 'C078HACQE3F'
+                  channel: 'C07TXJZ0T3L'
                 },
                 {
                   owner: 'datahaven-xyz',
                   repo: 'datahaven-docs',
-                  channel: 'C08RXH70ZAT'
+                  channel: 'C07TXJZ0T3L'
                 }
               ];
               
@@ -95,8 +95,16 @@ jobs:
                 lastRunTime = state.lastRunTime ? new Date(state.lastRunTime) : null;
                 console.log(`📂 Loaded state file`);
                 console.log(`🕐 Last run time: ${lastRunTime ? lastRunTime.toISOString() : 'null (first run)'}`);
+                
+                // Validate the last run time isn't too far in the future (corrupted state)
+                const now = new Date();
+                if (lastRunTime && lastRunTime > now) {
+                  console.log(`⚠️ Last run time is in the future, resetting state`);
+                  lastRunTime = null;
+                }
               } catch (err) {
-                console.log('📝 Creating new state file (first run)...');
+                console.log('📝 Creating new state file (first run or corrupted state)...');
+                console.log(`State file error: ${err.message}`);
               }
               
               const currentRunTime = new Date();
@@ -148,9 +156,49 @@ jobs:
                     
                     const recentAssignmentEvents = timelineEvents.filter(event => {
                       const eventTime = new Date(event.created_at);
-                      return eventTime > cutoffTime && 
+                      const isRecentEvent = eventTime > cutoffTime && 
                              (event.event === 'assigned' || 
                               event.event === 'review_requested');
+                      
+                      if (!isRecentEvent) return false;
+                      
+                      // Filter out automatic/system assignments
+                      // Check if the assignment was made immediately after PR creation (likely automatic)
+                      const prCreatedTime = new Date(pr.created_at);
+                      const timeDiff = Math.abs(eventTime - prCreatedTime);
+                      const isNearPRCreation = timeDiff < 30000; // Within 30 seconds of PR creation
+                      
+                      // Skip if it's an automatic assignment (no actor or very close to PR creation)
+                      if (!event.actor) {
+                        console.log(`         → Skipping system assignment (no actor)`);
+                        return false;
+                      }
+                      
+                      if (isNearPRCreation) {
+                        console.log(`         → Skipping potential automatic assignment (within 30s of PR creation)`);
+                        return false;
+                      }
+                      
+                      // Filter out self-assignments
+                      const actorUsername = event.actor.login;
+                      
+                      if (event.event === 'assigned' && event.assignee) {
+                        const assigneeUsername = event.assignee.login;
+                        if (actorUsername === assigneeUsername) {
+                          console.log(`         → Skipping self-assignment: ${actorUsername} assigned themselves`);
+                          return false;
+                        }
+                      }
+                      
+                      if (event.event === 'review_requested' && event.requested_reviewer) {
+                        const reviewerUsername = event.requested_reviewer.login;
+                        if (actorUsername === reviewerUsername) {
+                          console.log(`         → Skipping self-review request: ${actorUsername} requested review from themselves`);
+                          return false;
+                        }
+                      }
+                      
+                      return true;
                     });
                     
                     console.log(`     📋 Found ${recentAssignmentEvents.length} recent assignment events`);
@@ -161,15 +209,16 @@ jobs:
                     
                     for (const event of recentAssignmentEvents) {
                       console.log(`       Event: ${event.event} at ${event.created_at}`);
+                      console.log(`       Actor: ${event.actor ? event.actor.login : 'null'}`);
                       
                       if (event.event === 'assigned' && event.assignee) {
-                        console.log(`         → User ${event.assignee.login} was assigned`);
+                        console.log(`         → User ${event.assignee.login} was assigned by ${event.actor ? event.actor.login : 'system'}`);
                         usersToNotify.add(event.assignee.login);
                         notificationTypes.set(event.assignee.login, 'assigned');
                       } else if (event.event === 'review_requested' && event.requested_reviewer) {
                         const reviewer = event.requested_reviewer.login;
                         if (reviewer) {
-                          console.log(`         → User ${reviewer} was requested to review`);
+                          console.log(`         → User ${reviewer} was requested to review by ${event.actor ? event.actor.login : 'system'}`);
                           usersToNotify.add(reviewer);
                           notificationTypes.set(reviewer, 'review_requested');
                         }
@@ -190,7 +239,7 @@ jobs:
                         try {
                           await slack.chat.postMessage({
                             channel: repoConfig.channel,
-                            text: `${emoji} Hey <@${engineer.slack_id}>, you've been ${action} a PR in ${repoConfig.owner}/${repoConfig.repo}: ${pr.html_url}`
+                            text: `${emoji} Hey <@${engineer.slack_id}>, you've been ${action} a PR in: ${pr.html_url}`
                           });
                           console.log(`       ✅ Sent ${notificationType.toUpperCase()} notification to ${username} for PR #${pr.number}`);
                           totalNotifications++;
