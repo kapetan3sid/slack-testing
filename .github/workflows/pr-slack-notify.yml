@@ -112,7 +112,7 @@ jobs:
             /**
              * Send a Slack notification to remind a user to review a PR
              */
-            async function sendReminder(username, prUrl, prTitle) {
+            async function sendReminder(username, prUrl, prTitle, channelId) {
               const slackId = engineerMap.get(username);
               
               if (!slackId) {
@@ -122,10 +122,10 @@ jobs:
             
               try {
                 await slack.chat.postMessage({
-                  channel: slackId,
-                  text: `⏰ Reminder: You haven't reviewed this PR in the last 3 days:\n*${prTitle}*\n${prUrl}\n\nPlease take a look when you have a chance!`
+                  channel: channelId,
+                  text: `⏰ Hey <@${slackId}>, you haven't reviewed this PR in the last 3 days:\n*${prTitle}*\n${prUrl}\n\nPlease take a look when you have a chance!`
                 });
-                console.log(`Sent reminder to ${username} (${slackId}) for PR: ${prTitle}`);
+                console.log(`Sent reminder to ${username} (${slackId}) in channel ${channelId} for PR: ${prTitle}`);
               } catch (error) {
                 console.error(`Failed to send Slack message to ${username}:`, error.message);
               }
@@ -159,7 +159,7 @@ jobs:
              */
             console.log('Starting PR review reminder check...');
             
-            for (const { owner, repo } of REPOS) {
+            for (const { owner, repo, channel } of REPOS) {
               try {
                 console.log(`\nChecking repository: ${owner}/${repo}`);
                 
@@ -191,7 +191,7 @@ jobs:
                     
                     if (!isActive) {
                       console.log(`  ⚠️ ${username} has been inactive for 3+ days`);
-                      await sendReminder(username, pr.html_url, pr.title);
+                      await sendReminder(username, pr.html_url, pr.title, channel);
                     } else {
                       console.log(`  ✓ ${username} has been active in the last 3 days`);
                     }
