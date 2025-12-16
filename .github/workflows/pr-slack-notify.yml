@@ -1,134 +1,201 @@
-name: PR Slack Notify
+name: PR Review Reminder
 
 on:
-  pull_request:
-    types: [opened, ready_for_review, review_requested, assigned]
+  schedule:
+    # Run daily at 9 AM UTC
+    - cron: '0 9 * * *'
+  workflow_dispatch: # Allow manual triggering
 
 jobs:
-  notify:
+  check-inactive-reviewers:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      - run: npm install @slack/web-api
-      - name: Notify reviewers via Slack
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check PRs and send reminders
+        uses: actions/github-script@v7
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-        run: |
-          node <<'EOF'
-          const { WebClient } = require('@slack/web-api');
-          const fs = require('fs');
-          
-          async function main() {
-            try {
-              console.log('Starting Slack notification process...');
-              
-              if (!process.env.SLACK_BOT_TOKEN) {
-                console.error('Error: SLACK_BOT_TOKEN environment variable is required');
-                process.exit(1);
-              }
-              
-              const mapping = JSON.parse(fs.readFileSync('engineer-github-slack-mapping.json', 'utf8'));
-              const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
-              
-              // Debug: Test bot authentication
+        with:
+          script: |
+            const { WebClient } = require('@slack/web-api');
+            const fs = require('fs');
+            
+            const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
+            
+            // Special users who are checked as ASSIGNEES instead of REVIEWERS
+            const ASSIGNEE_REVIEWERS = new Set(['eshaben', 'dawnkelly09', '0xlukem', 'Telucero']);
+            
+            // Repositories to monitor
+            const REPOS = [
+              { owner: 'polkadot-developers', repo: 'polkadot-docs', channel: 'C07TXJZ0T3L' },
+              { owner: 'wormhole-foundation', repo: 'wormhole-docs', channel: 'C07TXJZ0T3L' },
+              { owner: 'kluster-ai', repo: 'docs', channel: 'C07TXJZ0T3L' },
+              { owner: 'moondance-labs', repo: 'tanssi-docs', channel: 'C07TXJZ0T3L' },
+              { owner: 'moonbeam-foundation', repo: 'moonbeam-docs', channel: 'C07TXJZ0T3L' },
+              { owner: 'datahaven-xyz', repo: 'datahaven-docs', channel: 'C07TXJZ0T3L' },
+              { owner: 'papermoonio', repo: 'kluster-mkdocs', channel: 'C07TXJZ0T3L' },
+              { owner: 'papermoonio', repo: 'polkadot-mkdocs', channel: 'C07TXJZ0T3L' },
+              { owner: 'papermoonio', repo: 'wormhole-mkdocs', channel: 'C07TXJZ0T3L' },
+              { owner: 'papermoonio', repo: 'datahaven-mkdocs', channel: 'C07TXJZ0T3L' },
+              { owner: 'papermoonio', repo: 'tanssi-mkdocs', channel: 'C07TXJZ0T3L' },
+              { owner: 'papermoonio', repo: 'moonbeam-mkdocs', channel: 'C07TXJZ0T3L' }
+            ];
+            
+            const STALE_THRESHOLD_MS = 3 * 24 * 60 * 60 * 1000; // 3 days in milliseconds
+            
+            // Load engineer mappings
+            const engineerData = JSON.parse(fs.readFileSync('engineer-github-slack-mapping.json', 'utf8'));
+            const engineerMap = new Map(
+              engineerData.engineers.map(e => [e.github_username, e.slack_id])
+            );
+            
+            /**
+             * Fetch all activity data for a PR once
+             */
+            async function fetchPRActivity(owner, repo, prNumber) {
               try {
-                const authTest = await slack.auth.test();
-                console.log('Bot authenticated as:', authTest.user, 'in workspace:', authTest.team);
-              } catch (err) {
-                console.error('❌ Auth test failed:', err.data || err.message);
-                return;
+                const [commentsResponse, reviewsResponse, issueCommentsResponse] = await Promise.all([
+                  github.rest.pulls.listReviewComments({ owner, repo, pull_number: prNumber }),
+                  github.rest.pulls.listReviews({ owner, repo, pull_number: prNumber }),
+                  github.rest.issues.listComments({ owner, repo, issue_number: prNumber })
+                ]);
+            
+                return {
+                  reviewComments: commentsResponse.data,
+                  reviews: reviewsResponse.data,
+                  issueComments: issueCommentsResponse.data
+                };
+              } catch (error) {
+                console.error(`Error fetching activity for PR #${prNumber}:`, error.message);
+                return {
+                  reviewComments: [],
+                  reviews: [],
+                  issueComments: []
+                };
               }
-              
-              // Get event data
-              const eventPath = process.env.GITHUB_EVENT_PATH;
-              const event = JSON.parse(fs.readFileSync(eventPath, 'utf8'));
-              
-              console.log('Event action:', event.action);
-              console.log('PR URL:', event.pull_request?.html_url);
-              
-              // The Slack Channel - your dedicated private channel
-              const CHANNEL_ID = 'C07TXJZ0T3L'; // Your private channel (bot must be invited)
-              
-              let reviewers = [];
-              let assignees = [];
-              
-              // Get reviewers and assignees based on event
-              if (event.action === 'review_requested' && event.requested_reviewer) {
-                reviewers.push(event.requested_reviewer.login);
-                console.log('Reviewer requested:', event.requested_reviewer.login);
-              } else if (event.action === 'assigned' && event.assignee) {
-                assignees.push(event.assignee.login);
-                console.log('Assignee added:', event.assignee.login);
-              } else if (event.pull_request) {
-                // For opened/ready_for_review, notify all current reviewers and assignees
-                if (event.pull_request.requested_reviewers) {
-                  reviewers = event.pull_request.requested_reviewers.map(r => r.login);
-                }
-                if (event.pull_request.assignees) {
-                  assignees = event.pull_request.assignees.map(a => a.login);
-                }
-              }
-              
-              // Remove duplicates
-              reviewers = [...new Set(reviewers)];
-              assignees = [...new Set(assignees)];
-              
-              console.log('Target reviewers:', reviewers);
-              console.log('Target assignees:', assignees);
-              
-              if (reviewers.length === 0 && assignees.length === 0) {
-                console.log('No target users found, skipping notifications');
-                return;
-              }
-              
-              // Send notifications to reviewers
-              for (const username of reviewers) {
-                const engineer = mapping.engineers.find(e => e.github_username === username);
-                if (engineer) {
-                  try {
-                    const result = await slack.chat.postMessage({
-                      channel: CHANNEL_ID,
-                      text: `🔍 Hey <@${engineer.slack_id}>, you've been requested to review a PR: ${event.pull_request.html_url}`
-                    });
-                    console.log(`✅ Sent REVIEW notification to ${username} (${engineer.slack_id}) in channel ${CHANNEL_ID}:`, result.ok);
-                  } catch (err) {
-                    console.error(`❌ FAILED to send review notification to ${username} in channel ${CHANNEL_ID}:`, err.data?.error || err.message);
-                    console.error('🚫 ABORTING: Cannot deliver to dedicated channel');
-                    process.exit(1);
-                  }
-                } else {
-                  console.log(`⚠️ No Slack mapping found for reviewer ${username}`);
-                }
-              }
-              
-              // Send notifications to assignees
-              for (const username of assignees) {
-                const engineer = mapping.engineers.find(e => e.github_username === username);
-                if (engineer) {
-                  try {
-                    const result = await slack.chat.postMessage({
-                      channel: CHANNEL_ID,
-                      text: `📝 Hey <@${engineer.slack_id}>, you've been assigned to a PR: ${event.pull_request.html_url}`
-                    });
-                    console.log(`✅ Sent ASSIGNMENT notification to ${username} (${engineer.slack_id}) in channel ${CHANNEL_ID}:`, result.ok);
-                  } catch (err) {
-                    console.error(`❌ FAILED to send assignment notification to ${username} in channel ${CHANNEL_ID}:`, err.data?.error || err.message);
-                    console.error('🚫 ABORTING: Cannot deliver to dedicated channel');
-                    process.exit(1);
-                  }
-                } else {
-                  console.log(`⚠️ No Slack mapping found for assignee ${username}`);
-                }
-              }
-            } catch (error) {
-              console.error('Script error:', error);
-              process.exit(1);
             }
-          }
-          
-          main();
-          EOF
-
+            
+            /**
+             * Check if a user has been active on a PR in the last 3 days
+             */
+            function hasRecentActivity(activityData, username) {
+              const now = Date.now();
+              const thresholdDate = new Date(now - STALE_THRESHOLD_MS);
+            
+              const hasRecentReviewComment = activityData.reviewComments.some(comment => {
+                return comment.user.login === username && 
+                       new Date(comment.created_at) >= thresholdDate;
+              });
+            
+              if (hasRecentReviewComment) return true;
+            
+              const hasRecentReview = activityData.reviews.some(review => {
+                return review.user.login === username && 
+                       new Date(review.submitted_at) >= thresholdDate;
+              });
+            
+              if (hasRecentReview) return true;
+            
+              const hasRecentIssueComment = activityData.issueComments.some(comment => {
+                return comment.user.login === username && 
+                       new Date(comment.created_at) >= thresholdDate;
+              });
+            
+              return hasRecentIssueComment;
+            }
+            
+            /**
+             * Send a Slack notification to remind a user to review a PR
+             */
+            async function sendReminder(username, prUrl, prTitle) {
+              const slackId = engineerMap.get(username);
+              
+              if (!slackId) {
+                console.log(`No Slack ID found for GitHub user: ${username}`);
+                return;
+              }
+            
+              try {
+                await slack.chat.postMessage({
+                  channel: slackId,
+                  text: `⏰ Reminder: You haven't reviewed this PR in the last 3 days:\n*${prTitle}*\n${prUrl}\n\nPlease take a look when you have a chance!`
+                });
+                console.log(`Sent reminder to ${username} (${slackId}) for PR: ${prTitle}`);
+              } catch (error) {
+                console.error(`Failed to send Slack message to ${username}:`, error.message);
+              }
+            }
+            
+            /**
+             * Get users to check for a PR based on assignees and reviewers
+             */
+            function getUsersToCheck(pr) {
+              const usersToCheck = new Set();
+            
+              // For special users (ASSIGNEE_REVIEWERS), only check if they're assignees
+              pr.assignees.forEach(assignee => {
+                if (ASSIGNEE_REVIEWERS.has(assignee.login)) {
+                  usersToCheck.add(assignee.login);
+                }
+              });
+            
+              // For everyone else, only check if they're requested reviewers
+              pr.requested_reviewers.forEach(reviewer => {
+                if (!ASSIGNEE_REVIEWERS.has(reviewer.login)) {
+                  usersToCheck.add(reviewer.login);
+                }
+              });
+            
+              return Array.from(usersToCheck);
+            }
+            
+            /**
+             * Main function to check all PRs and send reminders
+             */
+            console.log('Starting PR review reminder check...');
+            
+            for (const { owner, repo } of REPOS) {
+              try {
+                console.log(`\nChecking repository: ${owner}/${repo}`);
+                
+                const { data: prs } = await github.rest.pulls.list({
+                  owner,
+                  repo,
+                  state: 'open'
+                });
+            
+                console.log(`Found ${prs.length} open PR(s)`);
+            
+                for (const pr of prs) {
+                  console.log(`\nProcessing PR #${pr.number}: ${pr.title}`);
+                  
+                  const usersToCheck = getUsersToCheck(pr);
+                  
+                  if (usersToCheck.length === 0) {
+                    console.log('  No users to check for this PR');
+                    continue;
+                  }
+            
+                  console.log(`  Checking users: ${usersToCheck.join(', ')}`);
+            
+                  // Fetch all activity data once for this PR
+                  const activityData = await fetchPRActivity(owner, repo, pr.number);
+            
+                  for (const username of usersToCheck) {
+                    const isActive = hasRecentActivity(activityData, username);
+                    
+                    if (!isActive) {
+                      console.log(`  ⚠️ ${username} has been inactive for 3+ days`);
+                      await sendReminder(username, pr.html_url, pr.title);
+                    } else {
+                      console.log(`  ✓ ${username} has been active in the last 3 days`);
+                    }
+                  }
+                }
+              } catch (error) {
+                console.error(`Error processing repository ${owner}/${repo}:`, error.message);
+              }
+            }
+            
