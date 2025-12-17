@@ -190,6 +190,13 @@ jobs:
                 for (const pr of prs) {
                   console.log(`\nProcessing PR #${pr.number}: ${pr.title}`);
                   
+                  // Skip PRs with 'Blocked' label
+                  const hasBlockedLabel = pr.labels.some(label => label.name.toLowerCase() === 'blocked');
+                  if (hasBlockedLabel) {
+                    console.log('  ⛔ PR is labeled as "Blocked". Skipping...');
+                    continue;
+                  }
+                  
                   const usersToCheck = getUsersToCheck(pr);
                   
                   if (usersToCheck.length === 0) {
