@@ -2,8 +2,8 @@ name: PR Review Reminder
 
 on:
   schedule:
-    # Run daily at 9 AM UTC
-    - cron: '0 9 * * *'
+    # Run on weekdays at 9 AM UTC (Monday-Friday)
+    - cron: '0 9 * * 1-5'
   workflow_dispatch: # Allow manual triggering
 
 jobs:
@@ -31,6 +31,24 @@ jobs:
             const ASSIGNEE_REVIEWERS = new Set(['eshaben', 'dawnkelly09', '0xlukem', 'Telucero']);
             
             // Repositories to monitor
+            // Check if today is a working day (Monday-Friday)
+            const today = new Date();
+            const dayOfWeek = today.getUTCDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+            
+            if (dayOfWeek === 0 || dayOfWeek === 6) {
+              console.log('Today is a weekend. Skipping PR review reminder check.');
+              return;
+            }
+            
+            // On Mondays, check for 4 days of inactivity (to cover the weekend)
+            // On other weekdays, check for 3 days
+            const isMonday = dayOfWeek === 1;
+            const daysToCheck = isMonday ? 4 : 3;
+            const STALE_THRESHOLD_MS = daysToCheck * 24 * 60 * 60 * 1000;
+            
+            console.log(`Today is ${['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][dayOfWeek]}`);
+            console.log(`Checking for inactivity over the last ${daysToCheck} days`);
+            
             const REPOS = [
               { owner: 'polkadot-developers', repo: 'polkadot-docs', channel: 'C07TXJZ0T3L' },
               { owner: 'wormhole-foundation', repo: 'wormhole-docs', channel: 'C07TXJZ0T3L' },
@@ -45,8 +63,6 @@ jobs:
               { owner: 'papermoonio', repo: 'tanssi-mkdocs', channel: 'C07TXJZ0T3L' },
               { owner: 'papermoonio', repo: 'moonbeam-mkdocs', channel: 'C07TXJZ0T3L' }
             ];
-            
-            const STALE_THRESHOLD_MS = 3 * 24 * 60 * 60 * 1000; // 3 days in milliseconds
             
             // Load engineer mappings
             const engineerData = JSON.parse(fs.readFileSync('engineer-github-slack-mapping.json', 'utf8'));
