@@ -1,9 +1,6 @@
 name: PR Review Reminder
 
 on:
-  schedule:
-    # Run on weekdays at 9 AM UTC (Monday-Friday)
-    - cron: '0 9 * * 1-5'
   workflow_dispatch: # Allow manual triggering
 
 jobs:
@@ -139,7 +136,7 @@ jobs:
               try {
                 await slack.chat.postMessage({
                   channel: channelId,
-                  text: `⏰ Hey <@${slackId}>, you haven't reviewed this PR in the last 3 days:\n*${prTitle}*\n${prUrl}\n\nPlease take a look when you have a chance!`
+                  text: `⏰ Hey <@${slackId}>, just a quick reminder that this PR hasn't been reviewed in the last 3 days:\n*${prTitle}*\n${prUrl}\n\nPlease take a look when you have a chance!`
                 });
                 console.log(`Sent reminder to ${username} (${slackId}) in channel ${channelId} for PR: ${prTitle}`);
               } catch (error) {
@@ -189,6 +186,20 @@ jobs:
             
                 for (const pr of prs) {
                   console.log(`\nProcessing PR #${pr.number}: ${pr.title}`);
+                  
+                  // Skip draft PRs
+                  if (pr.draft) {
+                    console.log('  📝 PR is a draft. Skipping...');
+                    continue;
+                  }
+                  
+                  // Skip PRs that are younger than the threshold
+                  const prAge = Date.now() - new Date(pr.created_at).getTime();
+                  if (prAge < STALE_THRESHOLD_MS) {
+                    const ageInDays = Math.floor(prAge / (24 * 60 * 60 * 1000));
+                    console.log(`  🆕 PR is only ${ageInDays} day(s) old. Skipping...`);
+                    continue;
+                  }
                   
                   // Skip PRs with 'Blocked' label
                   const hasBlockedLabel = pr.labels.some(label => label.name.toLowerCase() === 'blocked');
