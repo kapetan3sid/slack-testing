@@ -137,7 +137,7 @@ jobs:
               }
             
               // Check for priority labels
-              const priorityLabels = ['low', 'medium', 'high'];
+              const priorityLabels = ['c1 - low', 'c2 - medium', 'c3 - high'];
               const priorityLabel = prLabels.find(label => 
                 priorityLabels.includes(label.name.toLowerCase())
               );
@@ -213,7 +213,7 @@ jobs:
                   }
                   
                   // Skip PRs with 'Blocked' label
-                  const hasBlockedLabel = pr.labels.some(label => label.name.toLowerCase() === 'blocked');
+                  const hasBlockedLabel = pr.labels.some(label => label.name.toLowerCase() === 'b2 - blocked');
                   if (hasBlockedLabel) {
                     console.log('  ⛔ PR is labeled as "Blocked". Skipping...');
                     continue;
