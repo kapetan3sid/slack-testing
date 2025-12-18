@@ -71,29 +71,56 @@ jobs:
             );
             
             /**
-             * Fetch all activity data for a PR once
+             * Fetch all activity data for a PR once, including timeline for assignment events
              */
             async function fetchPRActivity(owner, repo, prNumber) {
               try {
-                const [commentsResponse, reviewsResponse, issueCommentsResponse] = await Promise.all([
+                const [commentsResponse, reviewsResponse, issueCommentsResponse, timelineResponse] = await Promise.all([
                   github.rest.pulls.listReviewComments({ owner, repo, pull_number: prNumber }),
                   github.rest.pulls.listReviews({ owner, repo, pull_number: prNumber }),
-                  github.rest.issues.listComments({ owner, repo, issue_number: prNumber })
+                  github.rest.issues.listComments({ owner, repo, issue_number: prNumber }),
+                  github.rest.issues.listEventsForTimeline({ owner, repo, issue_number: prNumber })
                 ]);
             
                 return {
                   reviewComments: commentsResponse.data,
                   reviews: reviewsResponse.data,
-                  issueComments: issueCommentsResponse.data
+                  issueComments: issueCommentsResponse.data,
+                  timeline: timelineResponse.data
                 };
               } catch (error) {
                 console.error(`Error fetching activity for PR #${prNumber}:`, error.message);
                 return {
                   reviewComments: [],
                   reviews: [],
-                  issueComments: []
+                  issueComments: [],
+                  timeline: []
                 };
               }
+            }
+            
+            /**
+             * Get when a user was assigned or requested for review
+             */
+            function getAssignmentDate(timeline, username, isAssignee) {
+              // Look for assignment/review_requested events in timeline
+              const eventType = isAssignee ? 'assigned' : 'review_requested';
+              
+              // Find the most recent assignment event for this user
+              const assignmentEvent = timeline
+                .filter(event => {
+                  if (event.event === eventType) {
+                    if (isAssignee) {
+                      return event.assignee?.login === username;
+                    } else {
+                      return event.requested_reviewer?.login === username;
+                    }
+                  }
+                  return false;
+                })
+                .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+              
+              return assignmentEvent ? new Date(assignmentEvent.created_at) : null;
             }
             
             /**
@@ -128,7 +155,7 @@ jobs:
             /**
              * Send a Slack notification to remind a user to review a PR
              */
-            async function sendReminder(username, prUrl, prTitle, channelId, prLabels) {
+            async function sendReminder(username, prUrl, prTitle, channelId) {
               const slackId = engineerMap.get(username);
               
               if (!slackId) {
@@ -136,25 +163,10 @@ jobs:
                 return;
               }
             
-              // Check for priority labels (handle both "c1 - low" and "c1- low" formats)
-              const priorityLabel = prLabels.find(label => {
-                const labelName = label.name.toLowerCase().replace(/\s/g, ''); // Remove all spaces
-                return labelName.includes('c1-low') || labelName.includes('c2-medium') || labelName.includes('c3-high');
-              });
-              
-              // Extract just the priority level (e.g., 'low', 'medium', 'high')
-              let labelText = '';
-              if (priorityLabel) {
-                const labelName = priorityLabel.name.toLowerCase();
-                if (labelName.includes('low')) labelText = '\n*Priority:* low';
-                else if (labelName.includes('medium')) labelText = '\n*Priority:* medium';
-                else if (labelName.includes('high')) labelText = '\n*Priority:* high';
-              }
-            
               try {
                 await slack.chat.postMessage({
                   channel: channelId,
-                  text: `⏰ Hey <@${slackId}>, just a quick reminder that this PR hasn't been reviewed in the last 3 days:\n*${prTitle}*\n${prUrl}${labelText}\n\nPlease take a look when you have a chance!`
+                  text: `⏰ Hey <@${slackId}>, just a quick reminder that this PR hasn't been reviewed in the last 3 days:\n*${prTitle}*\n${prUrl}\n\nPlease take a look when you have a chance!`
                 });
                 console.log(`Sent reminder to ${username} (${slackId}) in channel ${channelId} for PR: ${prTitle}`);
               } catch (error) {
@@ -164,25 +176,26 @@ jobs:
             
             /**
              * Get users to check for a PR based on assignees and reviewers
+             * Returns array of objects with username and isAssignee flag
              */
             function getUsersToCheck(pr) {
-              const usersToCheck = new Set();
+              const usersToCheck = [];
             
               // For special users (ASSIGNEE_REVIEWERS), only check if they're assignees
               pr.assignees.forEach(assignee => {
                 if (ASSIGNEE_REVIEWERS.has(assignee.login)) {
-                  usersToCheck.add(assignee.login);
+                  usersToCheck.push({ username: assignee.login, isAssignee: true });
                 }
               });
             
               // For everyone else, only check if they're requested reviewers
               pr.requested_reviewers.forEach(reviewer => {
                 if (!ASSIGNEE_REVIEWERS.has(reviewer.login)) {
-                  usersToCheck.add(reviewer.login);
+                  usersToCheck.push({ username: reviewer.login, isAssignee: false });
                 }
               });
             
-              return Array.from(usersToCheck);
+              return usersToCheck;
             }
             
             /**
@@ -219,8 +232,8 @@ jobs:
                     continue;
                   }
                   
-                  // Skip PRs with 'Blocked' label
-                  const hasBlockedLabel = pr.labels.some(label => label.name.toLowerCase() === 'b2 - blocked');
+                  // Skip PRs with 'Blocked' label (e.g., "B2 - Blocked")
+                  const hasBlockedLabel = pr.labels.some(label => label.name.toLowerCase().includes('blocked'));
                   if (hasBlockedLabel) {
                     console.log('  ⛔ PR is labeled as "Blocked". Skipping...');
                     continue;
@@ -233,17 +246,38 @@ jobs:
                     continue;
                   }
             
-                  console.log(`  Checking users: ${usersToCheck.join(', ')}`);
+                  const usernames = usersToCheck.map(u => u.username).join(', ');
+                  console.log(`  Checking users: ${usernames}`);
             
                   // Fetch all activity data once for this PR
                   const activityData = await fetchPRActivity(owner, repo, pr.number);
             
-                  for (const username of usersToCheck) {
+                  for (const userInfo of usersToCheck) {
+                    const { username, isAssignee } = userInfo;
+                    
+                    // Check when the user was assigned/requested
+                    const assignmentDate = getAssignmentDate(activityData.timeline, username, isAssignee);
+                    
+                    if (!assignmentDate) {
+                      console.log(`  ⚠️ Could not find assignment date for ${username}. Skipping...`);
+                      continue;
+                    }
+                    
+                    const assignmentAge = Date.now() - assignmentDate.getTime();
+                    
+                    // Check if user has been assigned for at least 3 days (or 4 on Mondays)
+                    if (assignmentAge < STALE_THRESHOLD_MS) {
+                      const ageInDays = Math.floor(assignmentAge / (24 * 60 * 60 * 1000));
+                      console.log(`  ℹ️ ${username} was assigned only ${ageInDays} day(s) ago. Skipping...`);
+                      continue;
+                    }
+                    
+                    // Check if user has been active in the last 3 days (or 4 on Mondays)
                     const isActive = hasRecentActivity(activityData, username);
                     
                     if (!isActive) {
-                      console.log(`  ⚠️ ${username} has been inactive for 3+ days`);
-                      await sendReminder(username, pr.html_url, pr.title, channel, pr.labels);
+                      console.log(`  ⚠️ ${username} has been assigned for 3+ days and inactive. Sending reminder...`);
+                      await sendReminder(username, pr.html_url, pr.title, channel);
                     } else {
                       console.log(`  ✓ ${username} has been active in the last 3 days`);
                     }
