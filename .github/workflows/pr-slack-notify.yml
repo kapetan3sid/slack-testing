@@ -1,6 +1,9 @@
 name: PR Review Reminder
 
 on:
+  schedule:
+    # Run on weekdays at 9 AM UTC (Monday-Friday)
+    - cron: '0 9 * * 1-5'
   workflow_dispatch: # Allow manual triggering
 
 jobs:
@@ -125,7 +128,7 @@ jobs:
             /**
              * Send a Slack notification to remind a user to review a PR
              */
-            async function sendReminder(username, prUrl, prTitle, channelId) {
+            async function sendReminder(username, prUrl, prTitle, channelId, prLabels) {
               const slackId = engineerMap.get(username);
               
               if (!slackId) {
@@ -133,10 +136,18 @@ jobs:
                 return;
               }
             
+              // Check for priority labels
+              const priorityLabels = ['low', 'medium', 'high'];
+              const priorityLabel = prLabels.find(label => 
+                priorityLabels.includes(label.name.toLowerCase())
+              );
+              
+              const labelText = priorityLabel ? `\n*Priority:* ${priorityLabel.name}` : '';
+            
               try {
                 await slack.chat.postMessage({
                   channel: channelId,
-                  text: `⏰ Hey <@${slackId}>, just a quick reminder that this PR hasn't been reviewed in the last 3 days:\n*${prTitle}*\n${prUrl}\n\nPlease take a look when you have a chance!`
+                  text: `⏰ Hey <@${slackId}>, just a quick reminder that this PR hasn't been reviewed in the last 3 days:\n*${prTitle}*\n${prUrl}${labelText}\n\nPlease take a look when you have a chance!`
                 });
                 console.log(`Sent reminder to ${username} (${slackId}) in channel ${channelId} for PR: ${prTitle}`);
               } catch (error) {
@@ -225,7 +236,7 @@ jobs:
                     
                     if (!isActive) {
                       console.log(`  ⚠️ ${username} has been inactive for 3+ days`);
-                      await sendReminder(username, pr.html_url, pr.title, channel);
+                      await sendReminder(username, pr.html_url, pr.title, channel, pr.labels);
                     } else {
                       console.log(`  ✓ ${username} has been active in the last 3 days`);
                     }
