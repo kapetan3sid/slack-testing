@@ -136,13 +136,20 @@ jobs:
                 return;
               }
             
-              // Check for priority labels
-              const priorityLabels = ['c1 - low', 'c2 - medium', 'c3 - high'];
-              const priorityLabel = prLabels.find(label => 
-                priorityLabels.includes(label.name.toLowerCase())
-              );
+              // Check for priority labels (handle both "c1 - low" and "c1- low" formats)
+              const priorityLabel = prLabels.find(label => {
+                const labelName = label.name.toLowerCase().replace(/\s/g, ''); // Remove all spaces
+                return labelName.includes('c1-low') || labelName.includes('c2-medium') || labelName.includes('c3-high');
+              });
               
-              const labelText = priorityLabel ? `\n*Priority:* ${priorityLabel.name}` : '';
+              // Extract just the priority level (e.g., 'low', 'medium', 'high')
+              let labelText = '';
+              if (priorityLabel) {
+                const labelName = priorityLabel.name.toLowerCase();
+                if (labelName.includes('low')) labelText = '\n*Priority:* low';
+                else if (labelName.includes('medium')) labelText = '\n*Priority:* medium';
+                else if (labelName.includes('high')) labelText = '\n*Priority:* high';
+              }
             
               try {
                 await slack.chat.postMessage({
