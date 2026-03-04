@@ -1,0 +1,75 @@
+name: External PR Notifier
+
+on:
+  pull_request:
+    types: [opened]
+
+jobs:
+  notify-external-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check if PR author is a team member
+        id: check-author
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // List of internal team GitHub usernames (case-insensitive check)
+            const teamMembers = [
+              'albertov19',
+              'aljosamakevic',
+              'brunopgalvao',
+              'eshaben',
+              'nhussein11',
+            ];
+
+            const prAuthor = context.payload.pull_request.user.login.toLowerCase();
+            const isTeamMember = teamMembers.map(m => m.toLowerCase()).includes(prAuthor);
+
+            console.log(`PR author: ${prAuthor}`);
+            console.log(`Is team member: ${isTeamMember}`);
+
+            core.setOutput('is_team_member', isTeamMember.toString());
+            core.setOutput('pr_author', prAuthor);
+
+      - name: Comment on external PR
+        if: steps.check-author.outputs.is_team_member == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: 'Thanks for your contribution, someone from the team will come back to you shortly'
+            });
+
+      - name: Send webhook to n8n
+        if: steps.check-author.outputs.is_team_member == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const webhookUrl = '${{ secrets.N8N_WEBHOOK_URL }}';
+
+            const payload = {
+              repo_owner: context.repo.owner,
+              repo_name: context.repo.repo,
+              pr_number: context.payload.pull_request.number,
+              pr_title: context.payload.pull_request.title,
+              pr_url: context.payload.pull_request.html_url,
+              pr_author: context.payload.pull_request.user.login,
+              pr_author_avatar: context.payload.pull_request.user.avatar_url,
+            };
+
+            console.log('Sending webhook payload:', JSON.stringify(payload, null, 2));
+
+            const response = await fetch(webhookUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload),
+            });
+
+            if (!response.ok) {
+              throw new Error(`Webhook failed with status ${response.status}`);
+            }
+
+            console.log('Webhook sent successfully');
